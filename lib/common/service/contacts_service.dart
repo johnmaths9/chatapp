@@ -4,18 +4,21 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../entities/chat_user_model.dart';
 
-abstract class BaseUserService {
+abstract class BaseContactsService {
   /// Checks if the current user exists in Firestore.
   Future<bool> userExists();
 
   /// Searches for a user by phoneNumber and adds them as a chat user.
-  Future<bool> addChatUser(String phoneNumber);
+  Future<bool> addChatUser(String phoneNumber, String name);
 
   /// Retrieves self information from Firestore.
   Future<void> getSelfInfo();
 
   /// Creates a new user in Firestore.
   Future<void> createUser();
+
+  /// for adding an user to my user when first message is send
+  Future<void> sendFirstMessage(ChatUser chatUser, String msg, Type type);
 
   /// Updates the current user's info (name, about, etc).
   Future<void> updateUserInfo();
@@ -24,7 +27,7 @@ abstract class BaseUserService {
   Future<void> updatephotoURLture(File file);
 }
 
-class FirebaseUserService extends BaseUserService {
+class FirebaseContactsService extends BaseContactsService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
@@ -51,7 +54,7 @@ class FirebaseUserService extends BaseUserService {
     return _firestore
         .collection('users')
         .doc(currentUserId)
-        .collection('my_users') // Fetch from subcollection
+        .collection('contacts') // Fetch from subcollection
         .snapshots();
   }
 
@@ -64,57 +67,82 @@ class FirebaseUserService extends BaseUserService {
           await _usersCollection.doc(_currentAuthUser!.uid).get();
       return userDoc.exists;
     } catch (e) {
-      print('Error checking if user exists: $e');
-      return false;
+      throw Exception('Error checking if user exists: $e');
     }
   }
 
   @override
-  Future<bool> addChatUser(String phoneNumber) async {
+  Future<bool> addChatUser(String phoneNumber, String name) async {
     if (_currentAuthUser == null) return false;
 
     try {
-      // Search for user by phoneNumber
-      QuerySnapshot snapshot =
-          await _usersCollection
+      String currentUserId = _currentAuthUser!.uid;
+      // 🔎 Search for user by phone number
+      QuerySnapshot querySnapshot =
+          await _firestore
+              .collection('users')
               .where('phoneNumber', isEqualTo: phoneNumber)
               .limit(1)
               .get();
 
-      if (snapshot.docs.isEmpty) return false;
+      if (querySnapshot.docs.isEmpty) {
+        return false; // User not found
+      }
 
-      // Get the found user
-      DocumentSnapshot userDoc = snapshot.docs.first;
-      Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
+      // 🎯 Get user data
+      var userData = querySnapshot.docs.first.data() as Map<String, dynamic>;
+      String newUserId = userData['userId'];
 
-      // Check if this user is already in the current user's chat list
-      DocumentSnapshot chatUserDoc =
-          await _chatUsersCollection
-              .doc(_currentAuthUser!.uid)
-              .collection('users')
-              .doc(userDoc.id)
-              .get();
+      if (newUserId == currentUserId) {
+        return false; // Prevent adding yourself
+      }
 
-      if (chatUserDoc.exists) return true; // Already added
-
-      // Add the user to current user's chat list
-      await _chatUsersCollection
-          .doc(_currentAuthUser!.uid)
+      // 🌟 Add to current user's contacts
+      await _firestore
           .collection('users')
-          .doc(userDoc.id)
+          .doc(currentUserId)
+          .collection('contacts')
+          .doc(newUserId)
           .set({
-            'uId': userDoc.id,
-            'name': userData['name'],
-            'phoneNumber': userData['phoneNumber'],
-            'status': userData['status'] ?? '',
-            'photoURL': userData['photoURL'] ?? '',
-            'lastSeen': userData['lastSeen'] ?? DateTime.now(),
-            'createdAt': DateTime.now(),
+            "contactId": newUserId,
+            "name": name,
+            "phoneNumber": userData["phoneNumber"],
+            "photoURL": userData["photoURL"],
+            "addedAt": FieldValue.serverTimestamp(),
+            "lastMessage": "",
+            "lastMessageTimestamp": null,
+            "isOnline": userData["isOnline"] ?? false,
+            "unreadCount": 0,
           });
+
+      // 🌟 Add current user to the other user's contacts (Optional)
+      DocumentSnapshot currentUserData =
+          await _firestore.collection('users').doc(currentUserId).get();
+      if (currentUserData.exists) {
+        Map<String, dynamic> currentUserInfo =
+            currentUserData.data() as Map<String, dynamic>;
+
+        await _firestore
+            .collection('users')
+            .doc(newUserId)
+            .collection('contacts')
+            .doc(currentUserId)
+            .set({
+              "contactId": currentUserId,
+              "name": name,
+              "phoneNumber": currentUserInfo["phoneNumber"],
+              "photoURL": currentUserInfo["photoURL"],
+              "addedAt": FieldValue.serverTimestamp(),
+              "lastMessage": "",
+              "lastMessageTimestamp": null,
+              "isOnline": currentUserInfo["isOnline"] ?? false,
+              "unreadCount": 0,
+            });
+      }
 
       return true;
     } catch (e) {
-      print('Error adding chat user: $e');
+      print("Error adding contact: $e");
       return false;
     }
   }
@@ -179,6 +207,21 @@ class FirebaseUserService extends BaseUserService {
     } catch (e) {
       print('Error creating user: $e');
     }
+  }
+
+  @override
+  Future<void> sendFirstMessage(
+    ChatUser chatUser,
+    String msg,
+    Type type,
+  ) async {
+    await _firestore
+        .collection('users')
+        .doc(chatUser.id)
+        .collection('contacts')
+        .doc(_currentAuthUser!.uid)
+        .set({});
+    //.then((value) => sendMessage(chatUser, msg, type));
   }
 
   @override

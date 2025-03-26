@@ -23,7 +23,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     // TODO: implement initState
-    countryController.text = "+91";
+    countryController.text = "+212";
     super.initState();
   }
 
